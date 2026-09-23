@@ -35,28 +35,35 @@ async function markSent(table, idColumn, id, dateKey, kind) {
  * Общая логика для одного "подписчика" (личный пользователь или групповой
  * чат) — они одинаково устроены (group_id, morning_time, evening_time,
  * timezone), только шлём на разный chat_id и пишем в разный журнал.
+ * Ошибка на одном подписчике не должна ронять всю рассылку остальным —
+ * поэтому она ловится здесь и просто логируется.
  */
 async function processSubscriber(sub, { chatId, logTable, logIdColumn }) {
-  if (!sub.group_id) return 0;
+  if (!sub.group_id) return { sent: 0, error: null };
 
-  const { hhmm, dateKey } = nowInTimezone(sub.timezone);
-  let sent = 0;
+  try {
+    const { hhmm, dateKey } = nowInTimezone(sub.timezone);
+    let sent = 0;
 
-  if (sub.evening_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'evening'))) {
-    const text = await buildTomorrowDigest(sub.group_id, sub.timezone);
-    await sendTelegramMessage(chatId, text);
-    await markSent(logTable, logIdColumn, sub.id, dateKey, 'evening');
-    sent++;
+    if (sub.evening_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'evening'))) {
+      const text = await buildTomorrowDigest(sub.group_id, sub.timezone);
+      await sendTelegramMessage(chatId, text);
+      await markSent(logTable, logIdColumn, sub.id, dateKey, 'evening');
+      sent++;
+    }
+
+    if (sub.morning_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'morning'))) {
+      const text = await buildTodayDigest(sub.group_id, sub.timezone);
+      await sendTelegramMessage(chatId, text);
+      await markSent(logTable, logIdColumn, sub.id, dateKey, 'morning');
+      sent++;
+    }
+
+    return { sent, error: null };
+  } catch (e) {
+    console.error(`processSubscriber failed for ${logIdColumn}=${sub.id} (chat ${chatId}):`, e);
+    return { sent: 0, error: e.message || String(e) };
   }
-
-  if (sub.morning_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'morning'))) {
-    const text = await buildTodayDigest(sub.group_id, sub.timezone);
-    await sendTelegramMessage(chatId, text);
-    await markSent(logTable, logIdColumn, sub.id, dateKey, 'morning');
-    sent++;
-  }
-
-  return sent;
 }
 
 export default async function handler(req, res) {
@@ -74,21 +81,26 @@ export default async function handler(req, res) {
   );
 
   let sentCount = 0;
+  const errors = [];
 
   for (const user of users) {
-    sentCount += await processSubscriber(user, {
+    const result = await processSubscriber(user, {
       chatId: user.telegram_id,
       logTable: 'sent_log',
       logIdColumn: 'user_id',
     });
+    sentCount += result.sent;
+    if (result.error) errors.push({ type: 'user', id: user.id, error: result.error });
   }
 
   for (const gc of groupChats) {
-    sentCount += await processSubscriber(gc, {
+    const result = await processSubscriber(gc, {
       chatId: gc.chat_id,
       logTable: 'group_chat_sent_log',
       logIdColumn: 'group_chat_id',
     });
+    sentCount += result.sent;
+    if (result.error) errors.push({ type: 'group_chat', id: gc.id, error: result.error });
   }
 
   res.status(200).json({
@@ -96,5 +108,6 @@ export default async function handler(req, res) {
     checkedUsers: users.length,
     checkedGroupChats: groupChats.length,
     sent: sentCount,
+    errors,
   });
 }
