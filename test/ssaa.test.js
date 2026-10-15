@@ -61,6 +61,18 @@ test('разбор таблицы расписания', () => {
   assert.equal(sat.lesson_type, null);
 });
 
+test('сырой HTML сервера: без <tr>, одинарные кавычки, незакрытая таблица', () => {
+  // Именно так shedule.php отдаёт страницу на самом деле (браузер это
+  // исправляет сам). Старый разбор "по строкам" находил здесь 0 пар.
+  const raw = fixture('ssaa_college_2k_3gr_raw.html');
+  assert.ok(!raw.includes('</table>'));
+  assert.match(raw, /class='shedstrm'/);
+  const clean = parseScheduleHtml(fixture('ssaa_college_2k_3gr.html'));
+  const lessons = parseScheduleHtml(raw);
+  assert.equal(lessons.length, 41);
+  assert.deepEqual(lessons, clean);
+});
+
 test('подгруппы: все варианты записи', () => {
   assert.deepEqual(expandSubgroups({ subject: 'Химия', room: '101', teachers: ['A'] }),
     [{ subject: 'Химия', room: '101', teachers: ['A'], subgroup: null }]);
