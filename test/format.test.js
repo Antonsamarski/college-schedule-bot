@@ -31,16 +31,16 @@ test('расписание дня: номер пары, карточка, пре
     ],
   });
   assert.match(text, /Доброе утро/);
-  assert.match(text, /<b>Пятница, 16 октября<\/b>/);
+  assert.match(text, /🗓 <b>ПЯТНИЦА, 16 ОКТЯБРЯ<\/b>/);
   assert.match(text, /Сегодня {2}· {2}1-я неделя/);
-  assert.match(text, /<b>2 пара<\/b> {3}09:45 – 11:15 {3}<b>● идёт сейчас<\/b>/);
-  assert.equal(text.match(/Анатомия/g).length, 1, 'предмет у подгрупп пишется один раз');
-  assert.match(text, /<b>1 подгруппа<\/b> — ауд\. А1 {2}· {2}Ратцева Арина Алексеевна/);
-  assert.match(text, /<b>2 подгруппа<\/b> — ауд\. А2 {2}· {2}Корнилов Михаил Валентинович/);
-  assert.match(text, /<b>3 пара<\/b> {3}11:30 – 13:00\n<blockquote><b>Философия &lt;ПЗ&gt;<\/b>\nЛекция {2}· {2}ауд\. 410\nПреподаватель: Акимова Татьяна Олеговна<\/blockquote>/);
+  assert.match(text, /▪️ <b>2 пара<\/b> {2}· {2}09:45 – 11:15 {3}🔴 <b>сейчас<\/b>/);
+  assert.equal(text.match(/АНАТОМИЯ/g).length, 1, 'предмет у подгрупп пишется один раз');
+  assert.match(text, /<i>1 подгруппа<\/i> {2}👤 <b>Ратцева Арина Алексеевна<\/b> {2}· {2}📍 ауд\. А1/);
+  assert.match(text, /<i>2 подгруппа<\/i> {2}👤 <b>Корнилов Михаил Валентинович<\/b> {2}· {2}📍 ауд\. А2/);
+  assert.match(text, /▪️ <b>3 пара<\/b> {2}· {2}11:30 – 13:00\n<blockquote><b>ФИЛОСОФИЯ &lt;ПЗ&gt;<\/b>\n👤 <b>Акимова Татьяна Олеговна<\/b>\n📍 ауд\. 410 {2}· {2}<i>лекция<\/i><\/blockquote>/);
   assert.match(text, /Итого: 2 пары {2}· {2}с 09:45 до 13:00/);
   assert.doesNotMatch(text, /Окно/, 'между 2-й и 3-й парой окна нет');
-  assert.doesNotMatch(text, /[\u{1F300}-\u{1FAFF}]/u, 'без эмодзи в расписании');
+  assert.doesNotMatch(text, /[📐🧲🏀💻🏛🧬🌿🧠]/u, 'без эмодзи у предметов');
 });
 
 test('окно между парами помечается', () => {
@@ -50,7 +50,7 @@ test('окно между парами помечается', () => {
       L({ time_start: '14:00', time_end: '15:30', subject: 'Химия' }),
     ],
   });
-  assert.match(text, /<i>Окно — 2–3 пары · 09:45 – 13:00<\/i>/);
+  assert.match(text, /☕️ <i>Окно — 2–3 пары · 09:45 – 13:00<\/i>/);
   assert.match(text, /2 окна/);
 
   const one = formatDaySchedule({
@@ -86,22 +86,22 @@ test('пары преподавателя на день и неделя с да�
     L({ id: 1, time_start: '08:00', time_end: '09:30', subject: 'Анатомия', room: 'А2', group_name: 'Колледж · 2 курс · 3 группа', subgroup: 2 }),
     L({ id: 2, time_start: '14:00', time_end: '15:30', subject: 'Анатомия', room: 'А1', group_name: 'Колледж · 2 курс · 4 группа' }),
   ], { dateLabel: 'понедельник, 19 октября', relLabel: 'сегодня', current: { id: 1, time_start: '08:00', room: 'А2', group_name: 'Колледж · 2 курс · 3 группа' } });
-  assert.match(t, /^<b>Корнилов Михаил Валентинович<\/b>/);
-  assert.match(t, /Понедельник, 19 октября {2}· {2}Сегодня/);
-  assert.match(t, /<b>Сейчас на паре:<\/b> ауд\. А2, Колледж/);
-  assert.match(t, /<b>1 пара<\/b> {3}08:00 – 09:30 {3}<b>● идёт сейчас<\/b>/);
-  assert.match(t, /Группа: Колледж · 2 курс · 3 группа, 2 подгруппа/);
+  assert.match(t, /^👤 <b>КОРНИЛОВ МИХАИЛ ВАЛЕНТИНОВИЧ<\/b>/);
+  assert.match(t, /🗓 Понедельник, 19 октября {2}· {2}<i>Сегодня<\/i>/);
+  assert.match(t, /🔴 <b>Сейчас на паре:<\/b> ауд\. А2, Колледж/);
+  assert.match(t, /▪️ <b>1 пара<\/b> {2}· {2}08:00 – 09:30 {3}🔴 <b>сейчас<\/b>/);
+  assert.match(t, /👥 <b>Колледж · 2 курс · 3 группа<\/b>, 2 подгруппа/);
   assert.match(t, /Окно — 2–3 пары/);
 
   const w = formatWeekSchedule({ 1: [L({ time_start: '08:00', time_end: '09:30', subject: 'А', room: '101', teacher: 'Иванова Анна Ивановна' })] }, { name: 'Осень 2026' }, 1, null,
     { mondayKey: '2026-10-12', todayKey: '2026-10-16' });
-  assert.match(w, /<b>Неделя<\/b> {2}12\.10 – 18\.10/);
-  assert.match(w, /<b>Понедельник<\/b>, 12\.10\n<blockquote><b>1<\/b> {2}08:00 {3}<b>А<\/b>\n {10}<i>ауд\. 101 {2}· {2}Иванова А\. И\.<\/i><\/blockquote>/);
-  assert.match(w, /<b>Пятница<\/b>, 16\.10 {3}<b>● сегодня<\/b>\n<blockquote><i>пар нет<\/i><\/blockquote>/);
+  assert.match(w, /🗓 <b>НЕДЕЛЯ<\/b> {2}12\.10 – 18\.10/);
+  assert.match(w, /▫️ <b>ПОНЕДЕЛЬНИК<\/b> {2}· {2}12\.10\n<blockquote><b>1<\/b> {2}08:00 {3}<b>А<\/b>\n {10}👤 <b>Иванова А\. И\.<\/b> {2}· {2}📍 ауд\. 101<\/blockquote>/);
+  assert.match(w, /◾️ <b>ПЯТНИЦА<\/b> {2}· {2}16\.10 {3}<i>сегодня<\/i>\n<blockquote><i>пар нет<\/i><\/blockquote>/);
 });
 
 test('пустой день', () => {
-  assert.match(formatDaySchedule({ kind: 'evening', dateLabel: 'воскресенье', lessons: [] }), /Пар нет/);
+  assert.match(formatDaySchedule({ kind: 'evening', dateLabel: 'воскресенье', lessons: [] }), /ПАР НЕТ/);
 });
 
 test('длинные сообщения делятся под лимит Telegram', () => {
@@ -148,4 +148,16 @@ test('даты, введённые в чат', () => {
   assert.equal(relativeDayLabel('2026-10-15', today), 'вчера');
   assert.equal(relativeDayLabel('2026-10-25', today), null);
   assert.equal(isoWeekday('2026-10-18'), 7);
+});
+
+test('набор кастомных эмодзи (EMOJI_PACK) и запасной вариант', async () => {
+  const icons = await import('../lib/icons.js');
+  process.env.EMOJI_PACK = 'test_pack';
+  await icons.loadEmojiPack(async () => ({ stickers: [{ emoji: '👤', custom_emoji_id: '111' }, { emoji: '📍', custom_emoji_id: '222' }] }));
+  assert.equal(icons.ic('teacher'), '<tg-emoji emoji-id="111">👤</tg-emoji>');
+  assert.equal(icons.ic('gap'), '☕️', 'нет в наборе — обычный эмодзи');
+  const text = `${icons.ic('teacher')} <b>Иванова</b> · ${icons.ic('room')} 101`;
+  assert.ok(icons.hasCustomEmoji(text));
+  assert.equal(icons.stripCustomEmoji(text), '👤 <b>Иванова</b> · 📍 101');
+  delete process.env.EMOJI_PACK;
 });
