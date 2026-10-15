@@ -1,42 +1,56 @@
 import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
-import { nowInTimezone } from '../lib/time.js';
+import { nowInTimezone, minutesOf } from '../lib/time.js';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
+
+// Рассылка уходит, если сейчас в промежутке [время рассылки, +SEND_WINDOW_MIN).
+// Раньше требовалось точное совпадение минуты: стоило cron-job.org пропустить
+// один вызов (а он иногда пропускает), и рассылка за день терялась.
+const SEND_WINDOW_MIN = 20;
+// Vercel даёт функции 10 секунд. Что не успели — отправится на следующем тике
+// (окно это позволяет), а не оборвётся на середине.
+const TIME_BUDGET_MS = 8000;
 
 async function sendTelegramMessage(chatId, text) {
   const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
   });
-  if (!resp.ok) {
-    const body = await resp.text();
-    console.error('sendMessage failed:', resp.status, body);
-  }
+  if (resp.ok) return { ok: true };
+  const body = await resp.text();
+  console.error('sendMessage failed:', resp.status, body);
+  // 403 — бот заблокирован/удалён из чата, 400 — чата нет: повтор не поможет.
+  return { ok: false, retry: resp.status === 429 || resp.status >= 500 };
 }
 
-async function alreadySent(table, idColumn, id, dateKey, kind) {
+/**
+ * "Застолбить" рассылку атомарно: вставка в журнал проходит только у одного
+ * вызова, даже если два тика пришли одновременно — поэтому дублей не будет.
+ */
+async function claim(table, idColumn, id, dateKey, kind) {
   const { rows } = await query(
-    `SELECT 1 FROM ${table} WHERE ${idColumn} = $1 AND send_date = $2 AND kind = $3`,
+    `INSERT INTO ${table} (${idColumn}, send_date, kind) VALUES ($1, $2, $3)
+     ON CONFLICT DO NOTHING RETURNING id`,
     [id, dateKey, kind]
   );
   return rows.length > 0;
 }
 
-async function markSent(table, idColumn, id, dateKey, kind) {
-  await query(
-    `INSERT INTO ${table} (${idColumn}, send_date, kind) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-    [id, dateKey, kind]
-  );
+async function unclaim(table, idColumn, id, dateKey, kind) {
+  await query(`DELETE FROM ${table} WHERE ${idColumn} = $1 AND send_date = $2 AND kind = $3`, [id, dateKey, kind]);
+}
+
+export function isDue(sendTime, hhmm) {
+  if (!sendTime) return false;
+  const diff = minutesOf(hhmm) - minutesOf(sendTime);
+  return diff >= 0 && diff < SEND_WINDOW_MIN;
 }
 
 /**
- * Общая логика для одного "подписчика" (личный пользователь или групповой
- * чат) — они одинаково устроены (group_id, morning_time, evening_time,
- * timezone), только шлём на разный chat_id и пишем в разный журнал.
- * Ошибка на одном подписчике не должна ронять всю рассылку остальным —
- * поэтому она ловится здесь и просто логируется.
+ * Один подписчик (личный пользователь или групповой чат). Ошибка на одном не
+ * должна ронять рассылку остальным — поэтому ловится здесь и логируется.
  */
 async function processSubscriber(sub, { chatId, logTable, logIdColumn }) {
   if (!sub.group_id) return { sent: 0, error: null };
@@ -45,20 +59,21 @@ async function processSubscriber(sub, { chatId, logTable, logIdColumn }) {
     const { hhmm, dateKey } = nowInTimezone(sub.timezone);
     let sent = 0;
 
-    if (sub.evening_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'evening'))) {
-      const text = await buildTomorrowDigest(sub.group_id, sub.timezone);
-      await sendTelegramMessage(chatId, text);
-      await markSent(logTable, logIdColumn, sub.id, dateKey, 'evening');
-      sent++;
-    }
+    for (const kind of ['evening', 'morning']) {
+      const sendTime = kind === 'evening' ? sub.evening_time : sub.morning_time;
+      if (!isDue(sendTime, hhmm)) continue;
+      if (!(await claim(logTable, logIdColumn, sub.id, dateKey, kind))) continue;
 
-    if (sub.morning_time === hhmm && !(await alreadySent(logTable, logIdColumn, sub.id, dateKey, 'morning'))) {
-      const text = await buildTodayDigest(sub.group_id, sub.timezone);
-      await sendTelegramMessage(chatId, text);
-      await markSent(logTable, logIdColumn, sub.id, dateKey, 'morning');
-      sent++;
+      try {
+        const text = kind === 'evening' ? await buildTomorrowDigest(sub) : await buildTodayDigest(sub);
+        const result = await sendTelegramMessage(chatId, text);
+        if (result.ok) sent++;
+        else if (result.retry) await unclaim(logTable, logIdColumn, sub.id, dateKey, kind);
+      } catch (e) {
+        await unclaim(logTable, logIdColumn, sub.id, dateKey, kind);
+        throw e;
+      }
     }
-
     return { sent, error: null };
   } catch (e) {
     console.error(`processSubscriber failed for ${logIdColumn}=${sub.id} (chat ${chatId}):`, e);
@@ -73,6 +88,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  const startedAt = Date.now();
   const { rows: users } = await query(
     `SELECT * FROM users WHERE group_id IS NOT NULL AND (morning_time IS NOT NULL OR evening_time IS NOT NULL)`
   );
@@ -80,27 +96,23 @@ export default async function handler(req, res) {
     `SELECT * FROM group_chats WHERE group_id IS NOT NULL AND (morning_time IS NOT NULL OR evening_time IS NOT NULL)`
   );
 
+  const jobs = [
+    ...users.map((u) => [u, { chatId: u.telegram_id, logTable: 'sent_log', logIdColumn: 'user_id' }]),
+    ...groupChats.map((g) => [g, { chatId: g.chat_id, logTable: 'group_chat_sent_log', logIdColumn: 'group_chat_id' }]),
+  ];
+
   let sentCount = 0;
+  let skipped = 0;
   const errors = [];
 
-  for (const user of users) {
-    const result = await processSubscriber(user, {
-      chatId: user.telegram_id,
-      logTable: 'sent_log',
-      logIdColumn: 'user_id',
-    });
+  for (const [sub, opts] of jobs) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      skipped++;
+      continue;
+    }
+    const result = await processSubscriber(sub, opts);
     sentCount += result.sent;
-    if (result.error) errors.push({ type: 'user', id: user.id, error: result.error });
-  }
-
-  for (const gc of groupChats) {
-    const result = await processSubscriber(gc, {
-      chatId: gc.chat_id,
-      logTable: 'group_chat_sent_log',
-      logIdColumn: 'group_chat_id',
-    });
-    sentCount += result.sent;
-    if (result.error) errors.push({ type: 'group_chat', id: gc.id, error: result.error });
+    if (result.error) errors.push({ table: opts.logTable, id: sub.id, error: result.error });
   }
 
   res.status(200).json({
@@ -108,6 +120,7 @@ export default async function handler(req, res) {
     checkedUsers: users.length,
     checkedGroupChats: groupChats.length,
     sent: sentCount,
+    deferred: skipped,
     errors,
   });
 }
