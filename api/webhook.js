@@ -1,6 +1,18 @@
 import { createBot } from '../lib/bot.js';
 
 const bot = createBot();
+
+const COMMANDS = [
+  { command: 'today', description: '📅 Пары на сегодня' },
+  { command: 'tomorrow', description: '🌙 Пары на завтра' },
+  { command: 'week', description: '🗓 Неделя' },
+  { command: 'date', description: '📆 Календарь / пары на дату' },
+  { command: 'teacher', description: '👤 Найти преподавателя' },
+  { command: 'menu', description: '🏠 Главное меню' },
+  { command: 'settings', description: '⚙️ Настройки' },
+  { command: 'support', description: '💬 Написать в поддержку' },
+  { command: 'donate', description: '💝 Поддержать проект' },
+];
 let initialized = false;
 
 export default async function handler(req, res) {
@@ -21,6 +33,8 @@ export default async function handler(req, res) {
     if (!initialized) {
       await bot.init(); // подтягивает info о самом боте, делаем один раз на "тёплый" инстанс
       initialized = true;
+      // Меню команд у поля ввода («/»). Не ждём — ответ пользователю важнее.
+      bot.api.setMyCommands(COMMANDS).catch((e) => console.error('setMyCommands failed', e.description || e));
     }
     await bot.handleUpdate(req.body);
     res.status(200).send('ok');

@@ -1,6 +1,7 @@
 import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
-import { nowInTimezone, minutesOf } from '../lib/time.js';
+import { nowInTimezone, minutesOf, addDays } from '../lib/time.js';
+import { backgroundSync } from '../lib/ssaaSync.js';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 
@@ -11,14 +12,36 @@ const SEND_WINDOW_MIN = 20;
 // Vercel даёт функции 10 секунд. Что не успели — отправится на следующем тике
 // (окно это позволяет), а не оборвётся на середине.
 const TIME_BUDGET_MS = 8000;
+const PRELOAD_BUDGET_MS = 12000;
 
-async function sendTelegramMessage(chatId, text) {
-  const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+async function tg(method, payload) {
+  return fetch(`${TELEGRAM_API}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    body: JSON.stringify(payload),
   });
-  if (resp.ok) return { ok: true };
+}
+
+// Кнопки под рассылкой: открыть меню (новым сообщением, рассылка остаётся) и
+// сразу посмотреть следующий день.
+function digestKeyboard(kind, dateKey) {
+  const next = kind === 'morning' ? addDays(dateKey, 1) : addDays(dateKey, 2);
+  return {
+    inline_keyboard: [[
+      { text: kind === 'morning' ? '🌙 Завтра' : '📅 Послезавтра', callback_data: `d:${next.replaceAll('-', '')}` },
+      { text: '🏠 Меню', callback_data: 'm:new' },
+    ]],
+  };
+}
+
+async function sendTelegramMessage(chatId, text, replyMarkup) {
+  const resp = await tg('sendMessage', {
+    chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: replyMarkup,
+  });
+  if (resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    return { ok: true, messageId: data.result?.message_id };
+  }
   const body = await resp.text();
   console.error('sendMessage failed:', resp.status, body);
   // 403 — бот заблокирован/удалён из чата, 400 — чата нет: повтор не поможет.
@@ -52,7 +75,21 @@ export function isDue(sendTime, hhmm) {
  * Один подписчик (личный пользователь или групповой чат). Ошибка на одном не
  * должна ронять рассылку остальным — поэтому ловится здесь и логируется.
  */
-async function processSubscriber(sub, { chatId, logTable, logIdColumn }) {
+/**
+ * Чтобы чат не засорялся: новая рассылка заменяет предыдущую — старую
+ * удаляем (Telegram разрешает боту удалять свои сообщения в течение 48 часов).
+ */
+async function replacePreviousDigest(sub, table, chatId, messageId) {
+  const prev = sub.state?.lastDigestId;
+  if (prev && prev !== messageId) await tg('deleteMessage', { chat_id: chatId, message_id: prev }).catch(() => {});
+  await query(
+    `UPDATE ${table} SET state = jsonb_set(COALESCE(state, '{}'::jsonb), '{lastDigestId}', to_jsonb($1::bigint)) WHERE id = $2`,
+    [messageId, sub.id]
+  );
+  sub.state = { ...(sub.state || {}), lastDigestId: messageId };
+}
+
+async function processSubscriber(sub, { chatId, logTable, logIdColumn, table }) {
   if (!sub.group_id) return { sent: 0, error: null };
 
   try {
@@ -66,8 +103,11 @@ async function processSubscriber(sub, { chatId, logTable, logIdColumn }) {
 
       try {
         const text = kind === 'evening' ? await buildTomorrowDigest(sub) : await buildTodayDigest(sub);
-        const result = await sendTelegramMessage(chatId, text);
-        if (result.ok) sent++;
+        const result = await sendTelegramMessage(chatId, text, digestKeyboard(kind, dateKey));
+        if (result.ok) {
+          sent++;
+          if (result.messageId) await replacePreviousDigest(sub, table, chatId, result.messageId);
+        }
         else if (result.retry) await unclaim(logTable, logIdColumn, sub.id, dateKey, kind);
       } catch (e) {
         await unclaim(logTable, logIdColumn, sub.id, dateKey, kind);
@@ -97,8 +137,8 @@ export default async function handler(req, res) {
   );
 
   const jobs = [
-    ...users.map((u) => [u, { chatId: u.telegram_id, logTable: 'sent_log', logIdColumn: 'user_id' }]),
-    ...groupChats.map((g) => [g, { chatId: g.chat_id, logTable: 'group_chat_sent_log', logIdColumn: 'group_chat_id' }]),
+    ...users.map((u) => [u, { chatId: u.telegram_id, logTable: 'sent_log', logIdColumn: 'user_id', table: 'users' }]),
+    ...groupChats.map((g) => [g, { chatId: g.chat_id, logTable: 'group_chat_sent_log', logIdColumn: 'group_chat_id', table: 'group_chats' }]),
   ];
 
   let sentCount = 0;
@@ -115,8 +155,21 @@ export default async function handler(req, res) {
     if (result.error) errors.push({ table: opts.logTable, id: sub.id, error: result.error });
   }
 
+  // Остаток времени — на фоновую подгрузку групп с сайта (для поиска преподавателя).
+  let preload = null;
+  const leftMs = TIME_BUDGET_MS - (Date.now() - startedAt);
+  if (leftMs > 2500) {
+    try {
+      // Функции дано 30 секунд (vercel.json); одна загрузка с сайта — до 8 с.
+      preload = await backgroundSync(PRELOAD_BUDGET_MS);
+    } catch (e) {
+      console.error('backgroundSync failed', e);
+    }
+  }
+
   res.status(200).json({
     ok: true,
+    preload,
     checkedUsers: users.length,
     checkedGroupChats: groupChats.length,
     sent: sentCount,
