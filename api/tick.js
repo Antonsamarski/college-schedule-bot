@@ -1,6 +1,6 @@
 import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
-import { nowInTimezone, minutesOf, addDays } from '../lib/time.js';
+import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
@@ -20,18 +20,6 @@ async function tg(method, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-}
-
-// Кнопки под рассылкой: открыть меню (новым сообщением, рассылка остаётся) и
-// сразу посмотреть следующий день.
-function digestKeyboard(kind, dateKey) {
-  const next = kind === 'morning' ? addDays(dateKey, 1) : addDays(dateKey, 2);
-  return {
-    inline_keyboard: [[
-      { text: kind === 'morning' ? '🌙 Завтра' : '📅 Послезавтра', callback_data: `d:${next.replaceAll('-', '')}` },
-      { text: '🏠 Меню', callback_data: 'm:new' },
-    ]],
-  };
 }
 
 async function sendTelegramMessage(chatId, text, replyMarkup) {
@@ -103,7 +91,7 @@ async function processSubscriber(sub, { chatId, logTable, logIdColumn, table }) 
 
       try {
         const text = kind === 'evening' ? await buildTomorrowDigest(sub) : await buildTodayDigest(sub);
-        const result = await sendTelegramMessage(chatId, text, digestKeyboard(kind, dateKey));
+        const result = await sendTelegramMessage(chatId, text);
         if (result.ok) {
           sent++;
           if (result.messageId) await replacePreviousDigest(sub, table, chatId, result.messageId);
