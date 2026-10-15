@@ -22,26 +22,25 @@ test('преподаватели без дублей и склеек', () => {
   assert.deepEqual(splitTeacherField('Петров Б.Б.; Сидоров В.В.'), ['Петров Б.Б.', 'Сидоров В.В.']);
 });
 
-test('расписание дня: номера пар и подгруппы в одной паре', () => {
+test('расписание дня: номер пары, карточка, преподаватель, подгруппы', () => {
   const text = formatDaySchedule({
-    kind: 'morning', dateLabel: 'пятница, 16 октября', weekParity: 1, lessons: [
+    kind: 'morning', dateLabel: 'пятница, 16 октября', weekParity: 1, nowHHMM: '10:00', lessons: [
       L({ time_start: '09:45', time_end: '11:15', subject: 'Анатомия', room: 'А1', teacher: 'Ратцева Арина Алексеевна', subgroup: 1, lesson_type: 'ЛПЗ' }),
       L({ time_start: '09:45', time_end: '11:15', subject: 'Анатомия', room: 'А2', teacher: 'Корнилов Михаил Валентинович', subgroup: 2, lesson_type: 'ЛПЗ' }),
-      L({ time_start: '11:30', time_end: '13:00', subject: 'Философия <ПЗ>', room: '410', lesson_type: 'лекция' }),
+      L({ time_start: '11:30', time_end: '13:00', subject: 'Философия <ПЗ>', room: '410', lesson_type: 'лекция', teacher: 'Акимова Татьяна Олеговна' }),
     ],
   });
   assert.match(text, /Доброе утро/);
-  assert.match(text, /Пятница, 16 октября/);
-  assert.match(text, /сегодня · 1-я неделя/);
-  assert.match(text, /2️⃣ <b>09:45 – 11:15<\/b>/);
+  assert.match(text, /<b>Пятница, 16 октября<\/b>/);
+  assert.match(text, /Сегодня {2}· {2}1-я неделя/);
+  assert.match(text, /<b>2 пара<\/b> {3}09:45 – 11:15 {3}<b>● идёт сейчас<\/b>/);
   assert.equal(text.match(/Анатомия/g).length, 1, 'предмет у подгрупп пишется один раз');
-  assert.match(text, /├ 1️⃣ подгр\. · 🚪 А1 · Ратцева А\. А\./);
-  assert.match(text, /└ 2️⃣ подгр\. · 🚪 А2 · Корнилов М\. В\./);
-  assert.match(text, /3️⃣ <b>11:30 – 13:00<\/b>/);
-  assert.match(text, /Философия &lt;ПЗ&gt;/, 'HTML экранируется');
-  assert.match(text, /📖 Лекция/);
-  assert.match(text, /2 пары · 09:45 – 13:00/);
+  assert.match(text, /<b>1 подгруппа<\/b> — ауд\. А1 {2}· {2}Ратцева Арина Алексеевна/);
+  assert.match(text, /<b>2 подгруппа<\/b> — ауд\. А2 {2}· {2}Корнилов Михаил Валентинович/);
+  assert.match(text, /<b>3 пара<\/b> {3}11:30 – 13:00\n<blockquote><b>Философия &lt;ПЗ&gt;<\/b>\nЛекция {2}· {2}ауд\. 410\nПреподаватель: Акимова Татьяна Олеговна<\/blockquote>/);
+  assert.match(text, /Итого: 2 пары {2}· {2}с 09:45 до 13:00/);
   assert.doesNotMatch(text, /Окно/, 'между 2-й и 3-й парой окна нет');
+  assert.doesNotMatch(text, /[\u{1F300}-\u{1FAFF}]/u, 'без эмодзи в расписании');
 });
 
 test('окно между парами помечается', () => {
@@ -51,8 +50,8 @@ test('окно между парами помечается', () => {
       L({ time_start: '14:00', time_end: '15:30', subject: 'Химия' }),
     ],
   });
-  assert.match(text, /☕ <i>Окно · 2–3 пары · 09:45 – 13:00<\/i>/);
-  assert.match(text, /☕ 2 окна/);
+  assert.match(text, /<i>Окно — 2–3 пары · 09:45 – 13:00<\/i>/);
+  assert.match(text, /2 окна/);
 
   const one = formatDaySchedule({
     kind: 'date', dateLabel: 'среда', lessons: [
@@ -60,8 +59,8 @@ test('окно между парами помечается', () => {
       L({ time_start: '11:30', time_end: '13:00', subject: 'Б' }),
     ],
   });
-  assert.match(one, /Окно · 2 пара · 09:45 – 11:15/);
-  assert.match(one, /☕ 1 окно/);
+  assert.match(one, /Окно — 2 пара · 09:45 – 11:15/);
+  assert.match(one, /1 окно/);
 
   // Обед 13:00–14:00 между 3-й и 4-й — не окно.
   const lunch = formatDaySchedule({
@@ -79,26 +78,26 @@ test('окно между парами помечается', () => {
       L({ time_start: '12:00', time_end: '13:30', subject: 'Б' }),
     ],
   });
-  assert.match(custom, /Окно · 10:00 – 12:00 · 2 ч/);
+  assert.match(custom, /Окно — 10:00 – 12:00 · 2 ч/);
 });
 
 test('пары преподавателя на день и неделя с датами', () => {
   const t = formatTeacherDay('Корнилов Михаил Валентинович', [
     L({ id: 1, time_start: '08:00', time_end: '09:30', subject: 'Анатомия', room: 'А2', group_name: 'Колледж · 2 курс · 3 группа', subgroup: 2 }),
     L({ id: 2, time_start: '14:00', time_end: '15:30', subject: 'Анатомия', room: 'А1', group_name: 'Колледж · 2 курс · 4 группа' }),
-  ], { dateLabel: 'понедельник, 19 октября', relLabel: 'сегодня', current: { id: 1, room: 'А2', group_name: 'Колледж · 2 курс · 3 группа' } });
-  assert.match(t, /👤 <b>Корнилов Михаил Валентинович<\/b>/);
-  assert.match(t, /Понедельник, 19 октября · <i>сегодня<\/i>/);
-  assert.match(t, /🟢 <b>Сейчас на паре:<\/b> 🚪 А2/);
-  assert.match(t, /1️⃣ <b>08:00 – 09:30<\/b>  🟢 <b>идёт сейчас<\/b>/);
-  assert.match(t, /├ 👥 Колледж · 2 курс · 3 группа, 2 подгр\./);
-  assert.match(t, /Окно · 2–3 пары/);
+  ], { dateLabel: 'понедельник, 19 октября', relLabel: 'сегодня', current: { id: 1, time_start: '08:00', room: 'А2', group_name: 'Колледж · 2 курс · 3 группа' } });
+  assert.match(t, /^<b>Корнилов Михаил Валентинович<\/b>/);
+  assert.match(t, /Понедельник, 19 октября {2}· {2}Сегодня/);
+  assert.match(t, /<b>Сейчас на паре:<\/b> ауд\. А2, Колледж/);
+  assert.match(t, /<b>1 пара<\/b> {3}08:00 – 09:30 {3}<b>● идёт сейчас<\/b>/);
+  assert.match(t, /Группа: Колледж · 2 курс · 3 группа, 2 подгруппа/);
+  assert.match(t, /Окно — 2–3 пары/);
 
-  const w = formatWeekSchedule({ 1: [L({ time_start: '08:00', time_end: '09:30', subject: 'А' })] }, { name: 'Осень 2026' }, 1, null,
+  const w = formatWeekSchedule({ 1: [L({ time_start: '08:00', time_end: '09:30', subject: 'А', room: '101', teacher: 'Иванова Анна Ивановна' })] }, { name: 'Осень 2026' }, 1, null,
     { mondayKey: '2026-10-12', todayKey: '2026-10-16' });
-  assert.match(w, /Неделя · 12\.10 – 18\.10/);
-  assert.match(w, /▫️ <b>Понедельник<\/b> · 12\.10/);
-  assert.match(w, /🔶 <b>Пятница<\/b> · 16\.10 · <i>сегодня<\/i>\n      <i>пар нет<\/i>/);
+  assert.match(w, /<b>Неделя<\/b> {2}12\.10 – 18\.10/);
+  assert.match(w, /<b>Понедельник<\/b>, 12\.10\n<blockquote><b>1<\/b> {2}08:00 {3}<b>А<\/b>\n {10}<i>ауд\. 101 {2}· {2}Иванова А\. И\.<\/i><\/blockquote>/);
+  assert.match(w, /<b>Пятница<\/b>, 16\.10 {3}<b>● сегодня<\/b>\n<blockquote><i>пар нет<\/i><\/blockquote>/);
 });
 
 test('пустой день', () => {
