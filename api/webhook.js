@@ -1,4 +1,5 @@
 import { createBot } from '../lib/bot.js';
+import { loadEmojiPack } from '../lib/icons.js';
 
 const bot = createBot();
 
@@ -33,6 +34,7 @@ export default async function handler(req, res) {
     if (!initialized) {
       await bot.init(); // подтягивает info о самом боте, делаем один раз на "тёплый" инстанс
       initialized = true;
+      await loadEmojiPack((name) => bot.api.getStickerSet(name)); // EMOJI_PACK, если задан
       // Меню команд у поля ввода («/»). Не ждём — ответ пользователю важнее.
       bot.api.setMyCommands(COMMANDS).catch((e) => console.error('setMyCommands failed', e.description || e));
     }

@@ -2,6 +2,7 @@ import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
+import { loadEmojiPack, stripCustomEmoji, hasCustomEmoji } from '../lib/icons.js';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 
@@ -30,6 +31,8 @@ async function sendTelegramMessage(chatId, text, replyMarkup) {
     const data = await resp.json().catch(() => ({}));
     return { ok: true, messageId: data.result?.message_id };
   }
+  // Кастомные эмодзи недоступны (нет Premium у владельца) — шлём с обычными.
+  if (resp.status === 400 && hasCustomEmoji(text)) return sendTelegramMessage(chatId, stripCustomEmoji(text), replyMarkup);
   const body = await resp.text();
   console.error('sendMessage failed:', resp.status, body);
   // 403 — бот заблокирован/удалён из чата, 400 — чата нет: повтор не поможет.
@@ -117,6 +120,12 @@ export default async function handler(req, res) {
   }
 
   const startedAt = Date.now();
+  await loadEmojiPack(async (name) => {
+    const r = await tg('getStickerSet', { name });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.description);
+    return data.result;
+  });
   const { rows: users } = await query(
     `SELECT * FROM users WHERE group_id IS NOT NULL AND (morning_time IS NOT NULL OR evening_time IS NOT NULL)`
   );
