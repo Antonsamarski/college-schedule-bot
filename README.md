@@ -300,8 +300,26 @@ $env:WEBHOOK_SECRET="..."
 node scripts/set-webhook.js https://твой-проект.vercel.app
 ```
 
-### Шаг 6. Настроить внешний "будильник" для рассылок
-На [cron-job.org](https://cron-job.org) (бесплатно) создать job:
+### Шаг 6. Настроить "будильник" для рассылок
+
+**Вариант А (сейчас используется): планировщик в базе Supabase.** База сама
+каждые 5 минут вызывает `/api/tick` через расширения `pg_cron` и `pg_net`.
+Ключ для вызова генерируется внутри базы (таблица `app_secrets`, миграция 007),
+задавать его в Vercel не нужно. Включить (SQL Editor в Supabase, после миграций):
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS pg_net;
+SELECT cron.schedule('bot-tick', '*/5 * * * *', $job$
+  SELECT net.http_get(
+    url := 'https://твой-проект.vercel.app/api/tick',
+    headers := jsonb_build_object('X-Cron-Secret', (SELECT value FROM public.app_secrets WHERE key = 'tick_secret')),
+    timeout_milliseconds := 30000);
+$job$);
+```
+Проверить, что вызовы идут: `SELECT status_code, created FROM net._http_response ORDER BY created DESC LIMIT 5;`
+
+**Вариант Б: внешний сервис.** На [cron-job.org](https://cron-job.org) (бесплатно) создать job
+(учти: после серии ошибок cron-job.org сам выключает задачу):
 - URL: `https://твой-проект.vercel.app/api/tick`
 - Метод: GET
 - Периодичность: каждую минуту

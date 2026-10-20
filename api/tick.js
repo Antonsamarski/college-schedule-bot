@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
@@ -112,9 +113,32 @@ async function processSubscriber(sub, { chatId, logTable, logIdColumn, table }) 
   }
 }
 
-export default async function handler(req, res) {
+function sameSecret(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/**
+ * Тик запускают двое: внешний будильник (cron-job.org) с CRON_SECRET из
+ * настроек Vercel и планировщик pg_cron в самой базе Supabase — у него свой
+ * ключ, который лежит только в таблице app_secrets (см. миграцию 007).
+ */
+export async function isAuthorized(req) {
   const auth = req.headers['x-cron-secret'] || req.query?.secret;
-  if (auth !== process.env.CRON_SECRET) {
+  if (typeof auth !== 'string' || !auth) return false;
+  if (sameSecret(auth, process.env.CRON_SECRET)) return true;
+  try {
+    const { rows } = await query(`SELECT value FROM app_secrets WHERE key = 'tick_secret'`);
+    return sameSecret(auth, rows[0]?.value);
+  } catch {
+    return false; // таблицы ещё нет — пускаем только по CRON_SECRET
+  }
+}
+
+export default async function handler(req, res) {
+  if (!(await isAuthorized(req))) {
     res.status(401).send('unauthorized');
     return;
   }
