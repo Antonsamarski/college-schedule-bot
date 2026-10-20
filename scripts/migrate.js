@@ -6,12 +6,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
-import { sslFor } from '../lib/db.js';
+import { connectionConfig } from '../lib/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!databaseUrl) {
     console.error('Не задан DATABASE_URL. Смотри .env.example');
     process.exit(1);
@@ -22,10 +22,7 @@ async function main() {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  const client = new pg.Client({
-    connectionString: databaseUrl,
-    ssl: sslFor(databaseUrl),
-  });
+  const client = new pg.Client(connectionConfig(databaseUrl));
 
   await client.connect();
   try {
