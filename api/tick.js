@@ -4,6 +4,9 @@ import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
 import { loadEmojiPack, stripCustomEmoji, hasCustomEmoji } from '../lib/icons.js';
+import {
+  maxEnabled, maxSend, maxDelete, ensureMaxSubscription, maxTokenFingerprint,
+} from '../lib/max.js';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 
@@ -67,21 +70,37 @@ export function isDue(sendTime, hhmm) {
  * Один подписчик (личный пользователь или групповой чат). Ошибка на одном не
  * должна ронять рассылку остальным — поэтому ловится здесь и логируется.
  */
+/** Рассылка в MAX. Ошибки 4xx (бот заблокирован, чата нет) повтором не лечатся. */
+async function sendMaxDigest(to, text) {
+  try {
+    const { mid } = await maxSend(to, text);
+    return { ok: true, messageId: mid };
+  } catch (e) {
+    console.error('MAX send failed:', e.description || e.message || e);
+    return { ok: false, retry: !e.status || e.status === 429 || e.status >= 500 };
+  }
+}
+
 /**
  * Чтобы чат не засорялся: новая рассылка заменяет предыдущую — старую
  * удаляем (Telegram разрешает боту удалять свои сообщения в течение 48 часов).
+ * Номера сообщений: в Telegram — числа, в MAX — строки, храним как есть.
  */
-async function replacePreviousDigest(sub, table, chatId, messageId) {
+async function replacePreviousDigest(sub, { table, chatId, platform }, messageId) {
   const prev = sub.state?.lastDigestId;
-  if (prev && prev !== messageId) await tg('deleteMessage', { chat_id: chatId, message_id: prev }).catch(() => {});
+  if (prev && prev !== messageId) {
+    if (platform === 'max') await maxDelete(prev).catch(() => {});
+    else await tg('deleteMessage', { chat_id: chatId, message_id: prev }).catch(() => {});
+  }
   await query(
-    `UPDATE ${table} SET state = jsonb_set(COALESCE(state, '{}'::jsonb), '{lastDigestId}', to_jsonb($1::bigint)) WHERE id = $2`,
-    [messageId, sub.id]
+    `UPDATE ${table} SET state = jsonb_set(COALESCE(state, '{}'::jsonb), '{lastDigestId}', $1::jsonb) WHERE id = $2`,
+    [JSON.stringify(messageId), sub.id]
   );
   sub.state = { ...(sub.state || {}), lastDigestId: messageId };
 }
 
-async function processSubscriber(sub, { chatId, logTable, logIdColumn, table }) {
+async function processSubscriber(sub, opts) {
+  const { chatId, logTable, logIdColumn, platform, maxTo } = opts;
   if (!sub.group_id) return { sent: 0, error: null };
 
   try {
@@ -95,10 +114,10 @@ async function processSubscriber(sub, { chatId, logTable, logIdColumn, table }) 
 
       try {
         const text = kind === 'evening' ? await buildTomorrowDigest(sub) : await buildTodayDigest(sub);
-        const result = await sendTelegramMessage(chatId, text);
+        const result = platform === 'max' ? await sendMaxDigest(maxTo, text) : await sendTelegramMessage(chatId, text);
         if (result.ok) {
           sent++;
-          if (result.messageId) await replacePreviousDigest(sub, table, chatId, result.messageId);
+          if (result.messageId) await replacePreviousDigest(sub, opts, result.messageId);
         }
         else if (result.retry) await unclaim(logTable, logIdColumn, sub.id, dateKey, kind);
       } catch (e) {
@@ -158,9 +177,15 @@ export default async function handler(req, res) {
   );
 
   const jobs = [
-    ...users.map((u) => [u, { chatId: u.telegram_id, logTable: 'sent_log', logIdColumn: 'user_id', table: 'users' }]),
-    ...groupChats.map((g) => [g, { chatId: g.chat_id, logTable: 'group_chat_sent_log', logIdColumn: 'group_chat_id', table: 'group_chats' }]),
-  ];
+    ...users.map((u) => [u, {
+      chatId: u.telegram_id, platform: u.platform || 'telegram', maxTo: { userId: u.telegram_id },
+      logTable: 'sent_log', logIdColumn: 'user_id', table: 'users',
+    }]),
+    ...groupChats.map((g) => [g, {
+      chatId: g.chat_id, platform: g.platform || 'telegram', maxTo: { chatId: g.chat_id },
+      logTable: 'group_chat_sent_log', logIdColumn: 'group_chat_id', table: 'group_chats',
+    }]),
+  ].filter(([, o]) => o.platform !== 'max' || maxEnabled());
 
   let sentCount = 0;
   let skipped = 0;
@@ -174,6 +199,26 @@ export default async function handler(req, res) {
     const result = await processSubscriber(sub, opts);
     sentCount += result.sent;
     if (result.error) errors.push({ table: opts.logTable, id: sub.id, error: result.error });
+  }
+
+  // MAX: проверить подписку на вебхук (MAX отписывает бота после 8 часов
+  // ошибок; после перевыпуска токена меняется секрет — переподписываемся).
+  let max = null;
+  if (maxEnabled()) {
+    try {
+      const fp = maxTokenFingerprint();
+      const { rows } = await query(`SELECT value FROM app_secrets WHERE key = 'max_sub_fp'`);
+      const force = rows[0]?.value !== fp;
+      max = await ensureMaxSubscription({ force });
+      if (force && max !== 'skipped') {
+        await query(
+          `INSERT INTO app_secrets (key, value) VALUES ('max_sub_fp', $1)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [fp]);
+      }
+    } catch (e) {
+      max = `error: ${e.description || e.message || e}`;
+      console.error('MAX subscription check failed', e);
+    }
   }
 
   // Остаток времени — на фоновую подгрузку групп с сайта (для поиска преподавателя).
@@ -190,6 +235,7 @@ export default async function handler(req, res) {
 
   res.status(200).json({
     ok: true,
+    max,
     preload,
     checkedUsers: users.length,
     checkedGroupChats: groupChats.length,

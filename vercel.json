@@ -1,6 +1,13 @@
 {
   "functions": {
-    "api/webhook.js": { "maxDuration": 20 },
-    "api/tick.js": { "maxDuration": 30 }
+    "api/webhook.js": {
+      "maxDuration": 20
+    },
+    "api/tick.js": {
+      "maxDuration": 30
+    },
+    "api/max.js": {
+      "maxDuration": 20
+    }
   }
 }
