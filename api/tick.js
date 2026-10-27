@@ -14,10 +14,15 @@ const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 // Раньше требовалось точное совпадение минуты: стоило cron-job.org пропустить
 // один вызов (а он иногда пропускает), и рассылка за день терялась.
 const SEND_WINDOW_MIN = 20;
-// Vercel даёт функции 10 секунд. Что не успели — отправится на следующем тике
-// (окно это позволяет), а не оборвётся на середине.
-const TIME_BUDGET_MS = 8000;
-const PRELOAD_BUDGET_MS = 12000;
+// Функции дано 30 секунд (vercel.json). Рассылке — до 20 с: что не успели,
+// уйдёт на следующем тике (окно SEND_WINDOW_MIN это позволяет). Остаток — на
+// подгрузку групп с сайта, но так, чтобы уложиться в 27 с.
+const TIME_BUDGET_MS = 20_000;
+const PRELOAD_BUDGET_MS = 12_000;
+const FUNCTION_BUDGET_MS = 27_000;
+// Сколько рассылок отправляем одновременно. Telegram пускает до 30 сообщений
+// в секунду на бота, MAX — до 30 запросов в секунду: 6 потоков с запасом.
+const SEND_CONCURRENCY = 6;
 
 async function tg(method, payload) {
   return fetch(`${TELEGRAM_API}/${method}`, {
@@ -191,15 +196,22 @@ export default async function handler(req, res) {
   let skipped = 0;
   const errors = [];
 
-  for (const [sub, opts] of jobs) {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) {
-      skipped++;
-      continue;
+  // Несколько потоков разбирают общую очередь. Раньше рассылки шли по одной,
+  // и 90+ человек получали вечернее расписание 15 минут.
+  let next = 0;
+  async function worker() {
+    while (next < jobs.length) {
+      const [sub, opts] = jobs[next++];
+      if (Date.now() - startedAt > TIME_BUDGET_MS) {
+        skipped++;
+        continue;
+      }
+      const result = await processSubscriber(sub, opts);
+      sentCount += result.sent;
+      if (result.error) errors.push({ table: opts.logTable, id: sub.id, error: result.error });
     }
-    const result = await processSubscriber(sub, opts);
-    sentCount += result.sent;
-    if (result.error) errors.push({ table: opts.logTable, id: sub.id, error: result.error });
   }
+  await Promise.all(Array.from({ length: SEND_CONCURRENCY }, worker));
 
   // MAX: проверить подписку на вебхук (MAX отписывает бота после 8 часов
   // ошибок; после перевыпуска токена меняется секрет — переподписываемся).
@@ -223,11 +235,10 @@ export default async function handler(req, res) {
 
   // Остаток времени — на фоновую подгрузку групп с сайта (для поиска преподавателя).
   let preload = null;
-  const leftMs = TIME_BUDGET_MS - (Date.now() - startedAt);
-  if (leftMs > 2500) {
+  const leftMs = Math.min(PRELOAD_BUDGET_MS, FUNCTION_BUDGET_MS - (Date.now() - startedAt));
+  if (leftMs > 9000) { // одна загрузка с сайта — до 8 с
     try {
-      // Функции дано 30 секунд (vercel.json); одна загрузка с сайта — до 8 с.
-      preload = await backgroundSync(PRELOAD_BUDGET_MS);
+      preload = await backgroundSync(leftMs);
     } catch (e) {
       console.error('backgroundSync failed', e);
     }
