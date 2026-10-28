@@ -3,11 +3,14 @@ import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
+import { alertOwner, countAlertDay, maybeSendMorningSummary } from '../lib/ownerAlerts.js';
 import { loadEmojiPack, stripCustomEmoji, hasCustomEmoji } from '../lib/icons.js';
 import {
   maxEnabled, maxSend, maxDelete, ensureMaxSubscription, maxTokenFingerprint,
 } from '../lib/max.js';
 
+const DEFAULT_TZ = process.env.DEFAULT_TIMEZONE || 'Europe/Moscow';
+const escapeText = (t) => String(t ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 
 // Рассылка уходит, если сейчас в промежутке [время рассылки, +SEND_WINDOW_MIN).
@@ -242,6 +245,23 @@ export default async function handler(req, res) {
     } catch (e) {
       console.error('backgroundSync failed', e);
     }
+  }
+
+  // Тихие сообщения владельцу (студентам не уходит ничего). Любой сбой тут
+  // не должен ломать ответ тика.
+  try {
+    const { dateKey, hhmm } = nowInTimezone(DEFAULT_TZ);
+    const problems = [];
+    if (errors.length) problems.push(['Сбой рассылки', `Не отправлено подписчикам: ${errors.length}. Первая ошибка: ${escapeText(errors[0].error)}`]);
+    if (skipped > 5) problems.push(['Рассылка не успела', `Не хватило времени на ${skipped} подписчиков — досылаются следующим тиком. Если повторяется, нужно ускорять.`]);
+    if (typeof max === 'string' && max.startsWith('error')) problems.push(['MAX отвалился', escapeText(max)]);
+    if (preload && preload.errors > 3) problems.push(['Сайт ssaa.ru барахлит', `Ошибок загрузки расписания за тик: ${preload.errors}`]);
+    for (const [kind, text] of problems) {
+      if (await alertOwner(kind, text)) await countAlertDay(dateKey);
+    }
+    await maybeSendMorningSummary({ dateKey, hhmm });
+  } catch (e) {
+    console.error('owner notifications failed', e);
   }
 
   res.status(200).json({
