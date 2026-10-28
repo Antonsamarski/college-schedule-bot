@@ -3,6 +3,7 @@ import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
+import { updatePins } from '../lib/live.js';
 import { alertOwner, countAlertDay, maybeSendMorningSummary } from '../lib/ownerAlerts.js';
 import { loadEmojiPack, stripCustomEmoji, hasCustomEmoji } from '../lib/icons.js';
 import {
@@ -216,6 +217,14 @@ export default async function handler(req, res) {
   }
   await Promise.all(Array.from({ length: SEND_CONCURRENCY }, worker));
 
+  // «Живое расписание»: правим закреплённые сообщения (только у тех, кто включил).
+  let pins = null;
+  try {
+    pins = await updatePins(startedAt + TIME_BUDGET_MS + 4000);
+  } catch (e) {
+    console.error('updatePins failed', e);
+  }
+
   // MAX: проверить подписку на вебхук (MAX отписывает бота после 8 часов
   // ошибок; после перевыпуска токена меняется секрет — переподписываемся).
   let max = null;
@@ -267,6 +276,7 @@ export default async function handler(req, res) {
   res.status(200).json({
     ok: true,
     max,
+    pins,
     preload,
     checkedUsers: users.length,
     checkedGroupChats: groupChats.length,
