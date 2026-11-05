@@ -8,6 +8,9 @@
     },
     "api/max.js": {
       "maxDuration": 20
+    },
+    "api/alice.js": {
+      "maxDuration": 10
     }
   }
 }
