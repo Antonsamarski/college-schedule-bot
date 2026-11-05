@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { aliceAnswer } from '../lib/alice.js';
+import { query } from '../lib/db.js';
 
 // Вебхук навыка Яндекс.Алисы (Яндекс Диалоги → Webhook URL):
 //   https://<домен>/api/alice?key=<ALICE_SECRET>
@@ -15,7 +16,14 @@ export default async function handler(req, res) {
     res.status(200).send('ok');
     return;
   }
-  if (!sameSecret(req.query?.key, process.env.ALICE_SECRET)) {
+  let secret = process.env.ALICE_SECRET;
+  if (!secret) {
+    try {
+      const { rows: [r] } = await query(`SELECT value FROM app_settings WHERE key = 'alice_secret'`);
+      secret = r?.value;
+    } catch { /* таблицы нет — ключа нет */ }
+  }
+  if (!sameSecret(req.query?.key, secret)) {
     res.status(401).send('unauthorized');
     return;
   }
