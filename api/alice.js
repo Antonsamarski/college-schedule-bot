@@ -37,6 +37,14 @@ export default async function handler(req, res) {
     console.error('Alice webhook error:', err);
     text = 'Не получилось достать расписание. Попробуй чуть позже.';
   }
+  // Алиса принимает text и tts не длиннее 1024 символов: режем по границе предложения.
+  const cut = (t) => {
+    if (t.length <= 1000) return t;
+    const head = t.slice(0, 1000);
+    const i = Math.max(head.lastIndexOf('. '), head.lastIndexOf('.'));
+    return (i > 200 ? head.slice(0, i + 1) : head) + ' Остальное смотри в боте.';
+  };
+  text = cut(text);
   const plain = text.replace(/ sil <\[\d+\]> /g, ' ');
   res.status(200).json({
     version: body.version || '1.0',
