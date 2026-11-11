@@ -3,6 +3,7 @@ import { query } from '../lib/db.js';
 import { buildTodayDigest, buildTomorrowDigest } from '../lib/digest.js';
 import { nowInTimezone, minutesOf } from '../lib/time.js';
 import { backgroundSync } from '../lib/ssaaSync.js';
+import { runBroadcast } from '../lib/broadcast.js';
 import { clearLegacyPins } from '../lib/live.js';
 import { alertOwner, countAlertDay, maybeSendMorningSummary } from '../lib/ownerAlerts.js';
 import { loadEmojiPack, stripCustomEmoji, hasCustomEmoji } from '../lib/icons.js';
@@ -243,6 +244,14 @@ export default async function handler(req, res) {
       max = `error: ${e.description || e.message || e}`;
       console.error('MAX subscription check failed', e);
     }
+  }
+
+  // Адресные рассылки, поставленные в очередь вручную (audience.auto = true): досылаем по частям.
+  try {
+    const { rows } = await query("SELECT id FROM broadcasts WHERE NOT done AND audience->>'auto' = 'true' ORDER BY id LIMIT 1");
+    if (rows[0] && FUNCTION_BUDGET_MS - (Date.now() - startedAt) > 6000) await runBroadcast(rows[0].id, { budgetMs: 5000 });
+  } catch (e) {
+    console.error('auto broadcast failed', e);
   }
 
   // Остаток времени — на фоновую подгрузку групп с сайта (для поиска преподавателя).
