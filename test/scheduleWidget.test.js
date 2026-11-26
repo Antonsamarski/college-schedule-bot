@@ -117,3 +117,74 @@ test('HTML switches from today to week, a weekday and the next page', async () =
   assert.deepEqual(requests, ['schedule:w', 'schedule:d0:0', 'schedule:d0:1']);
   assert.equal(elements.schedule.children.at(-1).text, '2 / 2');
 });
+
+test('beta panel opens, switches tabs and edits the same Telegram message', async (t) => {
+  const pool = getPool();
+  const user = { id: 41, telegram_id: 42, username: null, group_id: 7, timezone: 'Europe/Samara', subgroup: null, state: {} };
+  let tester = true;
+  t.mock.method(pool, 'query', async (sql, params) => {
+    if (sql.includes('FROM feature_flags')) return { rows: [] };
+    if (sql.includes('FROM beta_testers')) return { rows: tester ? [{}] : [] };
+    if (sql.includes('FROM users')) return { rows: [{ ...user, state: { ...user.state } }] };
+    if (sql.includes('UPDATE users SET state')) {
+      if (sql.includes('jsonb_set')) user.state.screenId = JSON.parse(params[0]);
+      else user.state = JSON.parse(params[0]);
+      return { rows: [] };
+    }
+    if (sql.includes('FROM groups')) return { rows: [{ id: 7, name: 'Группа 7' }] };
+    if (sql.includes('FROM terms')) return { rows: [{ id: 8, name: 'Семестр', date_start: '2026-09-01' }] };
+    if (sql.includes('FROM lessons')) return { rows: [{ subject: 'Механика', time_start: '08:00', weekday: 1 }] };
+    throw new Error('Unexpected SQL: ' + sql);
+  });
+  const oldToken = process.env.BOT_TOKEN;
+  const oldNative = process.env.TELEGRAM_NATIVE_WIDGETS;
+  process.env.BOT_TOKEN = '1:fixture';
+  delete process.env.TELEGRAM_NATIVE_WIDGETS;
+  clearFlagCache();
+  t.after(() => {
+    if (oldToken === undefined) delete process.env.BOT_TOKEN;
+    else process.env.BOT_TOKEN = oldToken;
+    if (oldNative === undefined) delete process.env.TELEGRAM_NATIVE_WIDGETS;
+    else process.env.TELEGRAM_NATIVE_WIDGETS = oldNative;
+    clearFlagCache();
+  });
+  const bot = createBot();
+  bot.botInfo = { id: 1, is_bot: true, first_name: 'Test', username: 'test_bot' };
+  const calls = [];
+  bot.api.config.use(async (_prev, method, payload) => {
+    calls.push({ method, payload });
+    return { ok: true, result: method === 'sendMessage' ? { message_id: 51 } : true };
+  });
+  const from = { id: 42, is_bot: false, first_name: 'Test' };
+  const chat = { id: 42, type: 'private' };
+  const message = { message_id: 51, date: 100, chat, text: 'Расписание' };
+  await bot.handleUpdate({ update_id: 1, message: {
+    ...message, message_id: 49, from, text: '/widget',
+    entities: [{ type: 'bot_command', offset: 0, length: 7 }],
+  } });
+  const first = calls.find((call) => call.method === 'sendMessage');
+  assert.match(first.payload.text, /Механика/iu);
+  assert.equal(first.payload.reply_markup.inline_keyboard[0][0].text, '• Сегодня •');
+
+  async function choose(id, data) {
+    await bot.handleUpdate({ update_id: id, callback_query: { id: String(id), from, message, data } });
+  }
+  await choose(2, 'schedule:panel:tomorrow');
+  await choose(3, 'schedule:panel:week');
+  const week = calls.at(-1).payload;
+  assert.match(week.text, /НЕДЕЛЯ/);
+  const sunday = week.reply_markup.inline_keyboard.flat().find((button) => button.text === 'Вс');
+  assert.ok(sunday);
+  await choose(4, sunday.callback_data);
+  const edits = calls.filter((call) => call.method === 'editMessageText');
+  assert.equal(edits.length, 3);
+  assert.ok(edits.every((call) => call.payload.message_id === 51));
+  assert.ok(edits.at(-1).payload.reply_markup.inline_keyboard.flat().some((button) => button.text === '• Вс •'));
+  assert.equal(calls.filter((call) => call.method === 'sendMessage').length, 1);
+  assert.equal(calls.some((call) => call.method === 'sendWidget'), false);
+
+  tester = false;
+  await choose(5, 'schedule:panel:today');
+  assert.match(calls.at(-1).payload.text, /беты/);
+  assert.equal(calls.filter((call) => call.method === 'editMessageText').length, 3);
+});
