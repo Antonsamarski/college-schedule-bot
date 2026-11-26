@@ -138,7 +138,9 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
   });
   const oldToken = process.env.BOT_TOKEN;
   const oldNative = process.env.TELEGRAM_NATIVE_WIDGETS;
+  const oldWidgetApiRoot = process.env.TELEGRAM_WIDGET_API_ROOT;
   process.env.BOT_TOKEN = '1:fixture';
+  process.env.TELEGRAM_WIDGET_API_ROOT = 'grammy';
   delete process.env.TELEGRAM_NATIVE_WIDGETS;
   clearFlagCache();
   t.after(() => {
@@ -146,6 +148,8 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
     else process.env.BOT_TOKEN = oldToken;
     if (oldNative === undefined) delete process.env.TELEGRAM_NATIVE_WIDGETS;
     else process.env.TELEGRAM_NATIVE_WIDGETS = oldNative;
+    if (oldWidgetApiRoot === undefined) delete process.env.TELEGRAM_WIDGET_API_ROOT;
+    else process.env.TELEGRAM_WIDGET_API_ROOT = oldWidgetApiRoot;
     clearFlagCache();
   });
   const bot = createBot();
@@ -153,6 +157,18 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
   const calls = [];
   bot.api.config.use(async (_prev, method, payload) => {
     calls.push({ method, payload });
+    if (method === 'getWebhookInfo') return {
+      ok: true,
+      result: {
+        url: 'https://fixture.vercel.app/api/webhook',
+        allowed_updates: ['message', 'callback_query', 'widget_query'],
+      },
+    };
+    if (method === 'sendWidget') return {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: widget unavailable in fixture',
+    };
     return { ok: true, result: method === 'sendMessage' ? { message_id: 51 } : true };
   });
   const from = { id: 42, is_bot: false, first_name: 'Test' };
