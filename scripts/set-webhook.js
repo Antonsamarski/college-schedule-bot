@@ -12,7 +12,7 @@ if (!url || !botToken || !webhookSecret) {
   process.exit(1);
 }
 
-const webhookUrl = `${url.replace(/\/$/, '')}/api/webhook`;\nconst apiRoot = process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org/beta';
+const webhookUrl = `${url.replace(/\/$/, '')}/api/webhook`;\nconst apiRoot = process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org';
 
 const resp = await fetch(`${apiRoot}/bot${botToken}/setWebhook`, {
   method: 'POST',
