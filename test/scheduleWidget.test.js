@@ -138,9 +138,7 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
   });
   const oldToken = process.env.BOT_TOKEN;
   const oldNative = process.env.TELEGRAM_NATIVE_WIDGETS;
-  const oldWidgetApiRoot = process.env.TELEGRAM_WIDGET_API_ROOT;
   process.env.BOT_TOKEN = '1:fixture';
-  process.env.TELEGRAM_WIDGET_API_ROOT = 'grammy';
   delete process.env.TELEGRAM_NATIVE_WIDGETS;
   clearFlagCache();
   t.after(() => {
@@ -148,8 +146,6 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
     else process.env.BOT_TOKEN = oldToken;
     if (oldNative === undefined) delete process.env.TELEGRAM_NATIVE_WIDGETS;
     else process.env.TELEGRAM_NATIVE_WIDGETS = oldNative;
-    if (oldWidgetApiRoot === undefined) delete process.env.TELEGRAM_WIDGET_API_ROOT;
-    else process.env.TELEGRAM_WIDGET_API_ROOT = oldWidgetApiRoot;
     clearFlagCache();
   });
   const bot = createBot();
