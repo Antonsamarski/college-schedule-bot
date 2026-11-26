@@ -181,7 +181,7 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
   assert.ok(edits.every((call) => call.payload.message_id === 51));
   assert.ok(edits.at(-1).payload.reply_markup.inline_keyboard.flat().some((button) => button.text === '• Вс •'));
   assert.equal(calls.filter((call) => call.method === 'sendMessage').length, 1);
-  assert.equal(calls.some((call) => call.method === 'sendWidget'), false);
+  assert.equal(calls.some((call) => call.method === 'sendWidget'), true);
 
   tester = false;
   await choose(5, 'schedule:panel:today');
