@@ -167,14 +167,15 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
     };
     return { ok: true, result: method === 'sendMessage' ? { message_id: 51 } : true };
   });
-  const from = { id: 42, is_bot: false, first_name: 'Test' };
-  const chat = { id: 42, type: 'private' };
+  const from = { id: 8181483439, is_bot: false, first_name: 'Owner' };
+  const chat = { id: 8181483439, type: 'private' };
   const message = { message_id: 51, date: 100, chat, text: 'Расписание' };
   await bot.handleUpdate({ update_id: 1, message: {
     ...message, message_id: 49, from, text: '/widget',
     entities: [{ type: 'bot_command', offset: 0, length: 7 }],
   } });
   const first = calls.find((call) => call.method === 'sendMessage');
+  assert.match(first.payload.text, /Telegram 400/);
   assert.match(first.payload.text, /Механика/iu);
   assert.equal(first.payload.reply_markup.inline_keyboard[0][0].text, '• Сегодня •');
 
@@ -195,6 +196,8 @@ test('beta panel opens, switches tabs and edits the same Telegram message', asyn
   assert.equal(calls.filter((call) => call.method === 'sendMessage').length, 1);
   assert.equal(calls.some((call) => call.method === 'sendWidget'), true);
 
+  from.id = 42;
+  chat.id = 42;
   tester = false;
   await choose(5, 'schedule:panel:today');
   assert.match(calls.at(-1).payload.text, /беты/);
